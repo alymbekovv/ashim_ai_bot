@@ -6,9 +6,9 @@ from aiogram.filters import CommandStart
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 import aiohttp
 import os
+from aiohttp import web
 
 # === 🔧 Настройки ===
-
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -43,7 +43,6 @@ def main_menu():
     return kb.as_markup(resize_keyboard=True)
 
 # === 🧠 Интеллект (Groq API) ===
-# 🤖 GPT (через Groq)
 async def ask_groq(prompt: str) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -51,12 +50,12 @@ async def ask_groq(prompt: str) -> str:
         "Content-Type": "application/json"
     }
     data = {
-        "model": "llama-3.3-70b-versatile", 
+        "model": "llama-3.3-70b-versatile",
         "messages": [
             {
                 "role": "system",
                 "content": (
-                    "Ты — умный ассистент бренда ASHIM для маркетплейсов (Wildberriesа). "
+                    "Ты — умный ассистент бренда ASHIM для маркетплейсов (Wildberries). "
                     "Отвечай коротко, дружелюбно и только по делу. "
                     "Говори про заказы, отзывы, возвраты, доставку, уход за одеждой. "
                     "Если вопрос не по теме — отвечай: 'Извините, я помогаю только с покупками ASHIM на маркетплейсах.'"
@@ -109,11 +108,30 @@ async def handle_message(message: types.Message):
     reply = await ask_groq(user_text)
     await message.answer(reply)
 
-# === 🏁 Запуск ===
-async def main():
+
+# === 🌐 Web-сервер для Render ===
+async def handle_web(request):
+    return web.Response(text="✅ ASHIM Assistant работает!")
+
+async def start():
     init_db()
-    print("✅ ASHIM Assistant запущен.")
-    await dp.start_polling(bot)
+
+    # Запускаем Telegram-бота
+    asyncio.create_task(dp.start_polling(bot))
+
+    # Фейковый web-сервер, чтобы Render не ругался
+    app = web.Application()
+    app.router.add_get("/", handle_web)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 10000)
+    await site.start()
+
+    print("✅ Bot and web server running on port 10000")
+
+    # держим процесс живым
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(start())
