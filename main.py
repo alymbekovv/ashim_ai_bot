@@ -1,0 +1,119 @@
+import asyncio
+import logging
+import sqlite3
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import CommandStart
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
+import aiohttp
+import os
+
+# === 🔧 Настройки ===
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+logging.basicConfig(level=logging.INFO)
+bot = Bot(token=TELEGRAM_TOKEN)
+dp = Dispatcher()
+
+# === 🗄️ База данных ===
+def init_db():
+    conn = sqlite3.connect("data.db")
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        username TEXT,
+        message TEXT
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+# === 💬 Меню ===
+def main_menu():
+    kb = ReplyKeyboardBuilder()
+    kb.button(text="🛍 Проверить заказ")
+    kb.button(text="⭐ Оставить отзыв")
+    kb.button(text="📦 Отследить посылку")
+    kb.button(text="💬 Поддержка")
+    kb.button(text="🧺 Советы по уходу")
+    kb.adjust(2)
+    return kb.as_markup(resize_keyboard=True)
+
+# === 🧠 Интеллект (Groq API) ===
+# 🤖 GPT (через Groq)
+async def ask_groq(prompt: str) -> str:
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "llama-3.3-70b-versatile", 
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Ты — умный ассистент бренда ASHIM для маркетплейсов (Wildberriesа). "
+                    "Отвечай коротко, дружелюбно и только по делу. "
+                    "Говори про заказы, отзывы, возвраты, доставку, уход за одеждой. "
+                    "Если вопрос не по теме — отвечай: 'Извините, я помогаю только с покупками ASHIM на маркетплейсах.'"
+                )
+            },
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.5,
+        "max_tokens": 512
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=data) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    print("Groq API error:", resp.status, text)
+                    return "⚠️ Ошибка связи с интеллектом (Groq API). Проверьте ключ или попробуйте позже."
+
+                res = await resp.json()
+                return res["choices"][0]["message"]["content"].strip()
+
+    except Exception as e:
+        print("Groq request failed:", e)
+        return "⚠️ Ошибка интеллекта. Попробуйте позже."
+
+
+# === 🚀 Команда /start ===
+@dp.message(CommandStart())
+async def start(message: types.Message):
+    await message.answer(
+        f"👋 Привет, {message.from_user.first_name}!\n\n"
+        "Я — ASHIM Assistant. Помогаю с заказами, отзывами и клиентами на Wildberries.",
+        reply_markup=main_menu()
+    )
+
+# === 💡 Обработка всех сообщений ===
+@dp.message(F.text)
+async def handle_message(message: types.Message):
+    user_text = message.text.strip()
+
+    # сохраняем сообщение в базу
+    conn = sqlite3.connect("data.db")
+    cur = conn.cursor()
+    cur.execute("INSERT INTO messages (user_id, username, message) VALUES (?, ?, ?)",
+                (message.from_user.id, message.from_user.username, user_text))
+    conn.commit()
+    conn.close()
+
+    reply = await ask_groq(user_text)
+    await message.answer(reply)
+
+# === 🏁 Запуск ===
+async def main():
+    init_db()
+    print("✅ ASHIM Assistant запущен.")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
